@@ -1,129 +1,66 @@
 #!/usr/bin/env python3
 """
-Adobe Hackathon Problem Statement 1A - PDF Document Outline Extractor
-Competition-ready main entry point that processes PDFs from /app/input 
-and outputs JSON files to /app/output as per hackathon requirements.
+Simple test runner for the PDF analyzer.
 """
 
 import os
 import json
 import time
-import logging
-import sys
 from pathlib import Path
-
-# Import your existing analyzer
-from pdf_analyzer import DocumentProcessor
-
-def setup_logging():
-    """Configure logging for competition environment."""
-    # Minimal logging for competition to avoid noise
-    logging.basicConfig(
-        level=logging.WARNING,
-        format='%(levelname)s: %(message)s',
-        handlers=[logging.StreamHandler(sys.stdout)]
-    )
-
-def process_single_pdf(processor, pdf_path, output_dir):
-    """Process a single PDF and save the result."""
-    pdf_name = Path(pdf_path).stem
-    output_file = os.path.join(output_dir, f"{pdf_name}.json")
-    
-    try:
-        start_time = time.time()
-        
-        # Use your existing process_document method
-        result = processor.process_document(pdf_path)
-        
-        processing_time = time.time() - start_time
-        
-        if result and 'title' in result and 'outline' in result:
-            # Ensure output format matches competition requirements exactly
-            formatted_result = {
-                "title": result['title'],
-                "outline": []
-            }
-            
-            # Format outline according to competition spec
-            for heading in result['outline']:
-                formatted_heading = {
-                    "level": heading['level'],
-                    "text": heading['text'],
-                    "page": heading['page'] + 1  # Convert from 0-based to 1-based indexing
-                }
-                formatted_result['outline'].append(formatted_heading)
-            
-            # Save to JSON file
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(formatted_result, f, indent=2, ensure_ascii=False)
-            
-            print(f"✓ Processed {pdf_name}.pdf in {processing_time:.2f}s -> {len(formatted_result['outline'])} headings")
-            return True
-            
-        else:
-            print(f"✗ Failed to extract outline from {pdf_name}.pdf")
-            # Create empty result for failed processing
-            empty_result = {"title": "Document", "outline": []}
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(empty_result, f, indent=2, ensure_ascii=False)
-            return False
-            
-    except Exception as e:
-        print(f"✗ Error processing {pdf_name}.pdf: {str(e)}")
-        # Create empty result for error cases
-        empty_result = {"title": "Document", "outline": []}
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(empty_result, f, indent=2, ensure_ascii=False)
-        return False
+from pdf_analyzer import PDFAnalyzer
 
 def main():
-    """Main entry point for competition execution."""
-    setup_logging()
-    
-    # Competition-specified paths
+    """Test the PDF analyzer with files in input_pdfs directory."""
     input_dir = "/app/input"
     output_dir = "/app/output"
     
-    # Verify input directory exists
     if not os.path.exists(input_dir):
-        print(f"ERROR: Input directory {input_dir} does not exist")
-        sys.exit(1)
+        print(f"Input directory {input_dir} does not exist")
+        return
     
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Find all PDF files
-    pdf_files = []
-    for file in os.listdir(input_dir):
-        if file.lower().endswith('.pdf'):
-            pdf_files.append(file)
+    pdf_files = [f for f in os.listdir(input_dir) if f.endswith('.pdf')]
     
     if not pdf_files:
-        print("No PDF files found in input directory")
-        sys.exit(0)
+        print("No PDF files found in input_pdfs directory")
+        return
     
-    print(f"Processing {len(pdf_files)} PDF file(s)...")
+    print(f"Found {len(pdf_files)} PDF files to test")
     
-    # Initialize the document processor
-    processor = DocumentProcessor()
-    
-    # Process each PDF
-    total_start_time = time.time()
-    successful_count = 0
+    analyzer = PDFAnalyzer()
     
     for pdf_file in pdf_files:
         pdf_path = os.path.join(input_dir, pdf_file)
+        start_time = time.time()
         
-        if process_single_pdf(processor, pdf_path, output_dir):
-            successful_count += 1
-    
-    total_time = time.time() - total_start_time
-    
-    print(f"\nCompleted: {successful_count}/{len(pdf_files)} files processed successfully")
-    print(f"Total processing time: {total_time:.2f}s")
-    
-    # Exit successfully
-    sys.exit(0)
+        print(f"\n{'='*60}")
+        print(f"Processing: {pdf_file}")
+        print(f"{'='*60}")
+        
+        try:
+            result = analyzer.analyze_pdf(pdf_path)
+            processing_time = time.time() - start_time
+            
+            if result:
+                print(f"✓ Completed in {processing_time:.2f}s")
+                print(f"Title: {result['title']}")
+                print(f"Found {len(result['outline'])} headings:")
+                
+                for i, heading in enumerate(result['outline'], 1):
+                    indent = "  " * (int(heading['level'][1]) - 1)
+                    print(f"  {i:2d}. {indent}{heading['level']}: {heading['text']} (page {heading['page'] + 1})")
+                
+                # Save result as JSON
+                output_file = Path(output_dir) / f"{os.path.splitext(pdf_file)[0]}.json"
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, indent=2, ensure_ascii=False)
+                print(f"\nSaved result to: {output_file}")
+                
+            else:
+                print("✗ No result returned")
+                
+        except Exception as e:
+            processing_time = time.time() - start_time
+            print(f"✗ Error after {processing_time:.2f}s: {str(e)}")
 
 if __name__ == "__main__":
     main()

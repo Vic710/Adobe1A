@@ -7,7 +7,7 @@ import pickle
 from collections import defaultdict
 from typing import List, Dict, Optional, Tuple
 
-class DocumentProcessor:
+class PDFAnalyzer:
     """
     PDF analyzer that extracts titles and hierarchical headings from PDF documents.
     Uses font size, style, and positioning analysis for intelligent heading detection.
@@ -17,7 +17,7 @@ class DocumentProcessor:
         self.logger = logging.getLogger(__name__)
         logging.basicConfig(level=logging.INFO) # Enable logging to see the process
         
-    def process_document(self, pdf_path: str) -> Optional[Dict]:
+    def analyze_pdf(self, pdf_path: str) -> Optional[Dict]:
         """
         Analyze a PDF file and extract title and headings.
         """
@@ -34,38 +34,38 @@ class DocumentProcessor:
             if toc:
                 self.logger.info("Found embedded ToC (bookmarks). Using it for the outline.")
                 # Attempt to get title from metadata, otherwise use heuristic
-                title = doc.metadata.get('title') if doc.metadata.get('title') else self.get_document_title_fallback(doc)
-                # Set title page to 0 for metadata titles, otherwise it's set in get_document_title_fallback
+                title = doc.metadata.get('title') if doc.metadata.get('title') else self._extract_title_heuristic(doc)
+                # Set title page to 0 for metadata titles, otherwise it's set in _extract_title_heuristic
                 if doc.metadata.get('title'):
                     self._title_page = 0
                 # Store current title for post-processing comparison
                 self._current_title = title
                 outline = [{"level": f"H{lvl}", "text": text, "page": page - 1} for lvl, text, page in toc]
-                return {"title": title, "outline": self.finalize_heading_structure(outline)}
+                return {"title": title, "outline": self._post_process_headings(outline)}
 
             # If no embedded ToC, proceed with heuristic analysis on page content
             self.logger.info("No embedded ToC found. Starting heuristic analysis.")
-            text_blocks = self.parse_text_content(doc)
+            text_blocks = self._extract_text_blocks(doc)
             if not text_blocks:
                 self.logger.warning("No text blocks found in PDF.")
                 doc.close()
                 return None
 
             # Identify and filter out repeating headers and footers early
-            headers, footers = self.detect_recurring_elements(text_blocks, len(doc))
+            headers, footers = self._identify_headers_footers(text_blocks, len(doc))
             self.logger.info(f"Identified Headers to filter: {headers}")
             self.logger.info(f"Identified Footers to filter: {footers}")
             
             # Check for special document types before filtering
-            special_prefix = self.identify_document_type(text_blocks)
+            special_prefix = self._check_special_document_title(text_blocks)
             
             filtered_blocks = [
                 b for b in text_blocks
                 if b['text'] not in headers and b['text'] not in footers
             ]
 
-            font_stats = self.analyze_typography_patterns(filtered_blocks)
-            title = self.extract_document_title(filtered_blocks, font_stats)
+            font_stats = self._analyze_font_characteristics(filtered_blocks)
+            title = self._extract_title(filtered_blocks, font_stats)
             
             # Enhance title with special prefix if identified
             if special_prefix and special_prefix.lower() not in title.lower():
@@ -100,7 +100,7 @@ class DocumentProcessor:
             self.logger.error(f"Error analyzing PDF: {str(e)}")
             raise
 
-    def txt_title_extract(self, doc: fitz.Document) -> str:
+    def _extract_title_heuristic(self, doc: fitz.Document) -> str:
         """Extract title using heuristic analysis when metadata is not available."""
         text_blocks = self._extract_text_blocks(doc)
         if not text_blocks:
@@ -178,16 +178,16 @@ class DocumentProcessor:
                             else:
                                 # Finalize current group
                                 if current_group:
-                                    self.group_text_segments(current_group, text_blocks)
+                                    self._add_grouped_text_block(current_group, text_blocks)
                                 current_group = [current_line]
                         
                         # Add final group
                         if current_group:
-                            self.group_text_segments(current_group, text_blocks)
+                            self._add_grouped_text_block(current_group, text_blocks)
         
         return text_blocks
 
-    def group_text_segments(self, line_group: List[Dict], text_blocks: List[Dict]):
+    def _add_grouped_text_block(self, line_group: List[Dict], text_blocks: List[Dict]):
         """Add a grouped text block from multiple lines."""
         if not line_group:
             return
@@ -215,7 +215,7 @@ class DocumentProcessor:
             "line_count": len(line_group)
         })
 
-    def analyze_typography_patterns(self, text_blocks: List[Dict]) -> Dict:
+    def _analyze_font_characteristics(self, text_blocks: List[Dict]) -> Dict:
         """Analyze font characteristics to identify typical patterns."""
         font_sizes = []
         font_styles = defaultdict(int)
@@ -257,7 +257,7 @@ class DocumentProcessor:
             "color_frequency": color_frequency
         }
 
-    def extract_document_title(self, text_blocks: List[Dict], font_stats: Dict) -> str:
+    def _extract_title(self, text_blocks: List[Dict], font_stats: Dict) -> str:
         """Extract document title using semantic analysis and multi-line detection."""
         candidates = []
         
@@ -268,7 +268,7 @@ class DocumentProcessor:
         first_page_blocks.sort(key=lambda x: x["bbox"][1])
         
         # Look for specific title patterns first (like RFP titles)
-        rfp_title = self.extract_rfp_document_title(first_page_blocks)
+        rfp_title = self._detect_rfp_title(first_page_blocks)
         if rfp_title:
             return rfp_title
             
@@ -279,11 +279,11 @@ class DocumentProcessor:
             text = block["text"].strip()
             
             # Skip very short text or obvious metadata
-            if len(text) < 3 or self.classify_content_type(text):
+            if len(text) < 3 or self._is_likely_metadata(text):
                 continue
             
             # Calculate title score with enhanced semantic understanding
-            score = self.compute_title_relevance_score(block, font_stats, first_page_blocks, i)
+            score = self._calculate_semantic_title_score(block, font_stats, first_page_blocks, i)
             
             if score > 0:
                 # Check for multi-line titles by looking at nearby blocks
@@ -318,7 +318,7 @@ class DocumentProcessor:
         # Fallback: use first substantial text from first page
         for block in first_page_blocks:
             text = block["text"].strip()
-            if len(text) > 5 and not self.classify_content_type(text):
+            if len(text) > 5 and not self._is_likely_metadata(text):
                 # Store fallback title page
                 self._title_page = block["page"]
                 return text
@@ -327,7 +327,7 @@ class DocumentProcessor:
         self._title_page = 0
         return "Document"
 
-    def extract_rfp_document_title(self, first_page_blocks: List[Dict]) -> Optional[str]:
+    def _detect_rfp_title(self, first_page_blocks: List[Dict]) -> Optional[str]:
         """Detect RFP-style titles that span multiple blocks."""
         title_parts = []
         
@@ -356,7 +356,7 @@ class DocumentProcessor:
                     
                     # Add if it seems to be part of the title
                     if (len(next_text) > 3 and 
-                        not self.classify_content_type(next_text) and
+                        not self._is_likely_metadata(next_text) and
                         not re.match(r'^\d+$', next_text)):  # Not just a number
                         title_parts.append(next_text)
                         
@@ -464,7 +464,7 @@ class DocumentProcessor:
         
         return None
 
-    def rebuild_title_structure(self, main_block: Dict, all_blocks: List[Dict], block_index: int) -> str:
+    def _reconstruct_multiline_title(self, main_block: Dict, all_blocks: List[Dict], block_index: int) -> str:
         """Reconstruct a title that might span multiple lines."""
         title_parts = [main_block["text"]]
         main_size = main_block["size"]
@@ -530,7 +530,7 @@ class DocumentProcessor:
         
         return full_title
 
-    def scan_for_overview_patterns(self, text_blocks: List[Dict]) -> Optional[str]:
+    def _check_for_overview_prefix(self, text_blocks: List[Dict]) -> Optional[str]:
         """Check if there's an 'Overview' text that should be part of the title."""
         # Look for "Overview" in first few blocks
         for block in text_blocks[:10]:
@@ -539,7 +539,7 @@ class DocumentProcessor:
                 return "Overview"
         return None
 
-    def compute_title_relevance_score(self, block: Dict, font_stats: Dict, all_blocks: List[Dict], position: int) -> float:
+    def _calculate_semantic_title_score(self, block: Dict, font_stats: Dict, all_blocks: List[Dict], position: int) -> float:
         """Calculate title score using semantic analysis."""
         text = block["text"].strip()
         size = block["size"]
@@ -586,7 +586,7 @@ class DocumentProcessor:
         
         return max(0, score)
 
-    def analyze_term_frequency(self, blocks: List[Dict]) -> Dict[str, int]:
+    def _calculate_word_frequency(self, blocks: List[Dict]) -> Dict[str, int]:
         """Calculate word frequency across all blocks."""
         word_freq = defaultdict(int)
         for block in blocks:
@@ -596,7 +596,7 @@ class DocumentProcessor:
                     word_freq[word] += 1
         return dict(word_freq)
 
-    def classify_content_type(self, text: str) -> bool:
+    def _is_likely_metadata(self, text: str) -> bool:
         """Check if text is likely metadata rather than title or heading."""
         metadata_patterns = [
             r'^\d+$',  # Just numbers
@@ -713,7 +713,7 @@ class DocumentProcessor:
         
         return headers, footers
 
-    def process_visual_table_of_contents(self, text_blocks: List[Dict]) -> List[Dict]:
+    def _parse_visual_toc(self, text_blocks: List[Dict]) -> List[Dict]:
         """Parse visual table of contents from text blocks."""
         toc_headings = []
         
@@ -759,7 +759,7 @@ class DocumentProcessor:
         
         return toc_headings if len(toc_headings) > 2 else []
 
-    def extract_validated_headings(self, text_blocks: List[Dict], font_stats: Dict, all_blocks: List[Dict]) -> List[Dict]:
+    def _extract_headings_with_validation(self, text_blocks: List[Dict], font_stats: Dict, all_blocks: List[Dict]) -> List[Dict]:
         """Extract headings with enhanced validation."""
         headings = []
         
@@ -800,10 +800,10 @@ class DocumentProcessor:
             for i, block in enumerate(blocks):
                 text = block["text"].strip()
                 
-                if len(text) < 3 or self.classify_content_type(text):
+                if len(text) < 3 or self._is_likely_metadata(text):
                     continue
                 
-                if self.validate_heading_candidate(block, font_stats):
+                if self._is_likely_heading(block, font_stats):
                     # Use smart level detection that considers content patterns
                     level = self._determine_heading_level_smart(block, font_stats)
                     
@@ -819,7 +819,7 @@ class DocumentProcessor:
         
         return self._post_process_headings(headings)
 
-    def locate_toc_pages(self, page_blocks: Dict, max_page: int = 5) -> List[int]:
+    def _identify_toc_pages(self, page_blocks: Dict, max_page: int = 5) -> List[int]:
         """
         Identify pages that are Table of Contents, Index, or similar navigation pages.
         Returns list of page numbers (0-based) that should be treated as ToC pages.
@@ -930,7 +930,7 @@ class DocumentProcessor:
         
         return final_toc_pages
 
-    def extract_toc_header_info(self, blocks: List[Dict], font_stats: Dict) -> Optional[Dict]:
+    def _extract_toc_page_header(self, blocks: List[Dict], font_stats: Dict) -> Optional[Dict]:
         """
         Extract only the main header from a ToC page (like "Table of Contents").
         Returns the header as a heading dict or None if not found.
@@ -943,7 +943,7 @@ class DocumentProcessor:
             text = block["text"].strip()
             
             # Skip very short or likely metadata
-            if len(text) < 3 or self.classify_content_type(text):
+            if len(text) < 3 or self._is_likely_metadata(text):
                 continue
             
             # Check if this looks like a ToC header
@@ -975,12 +975,12 @@ class DocumentProcessor:
         
         return None
 
-    def validate_heading_candidate(self, block: Dict, font_stats: Dict) -> bool:
+    def _is_likely_heading(self, block: Dict, font_stats: Dict) -> bool:
         """Determine if a text block is likely to be a heading."""
         text = block["text"].strip()
         
         # First check if it's metadata/date/table data
-        if self.classify_content_type(text):
+        if self._is_likely_metadata(text):
             return False
         
         # Length check (headings are usually not too long)
@@ -1181,7 +1181,7 @@ class DocumentProcessor:
         
         return score >= 4
 
-    def calculate_heading_hierarchy(self, font_size: float, h1_thresh: float, 
+    def _determine_heading_level(self, font_size: float, h1_thresh: float, 
                                 h2_thresh: float, h3_thresh: float) -> Optional[str]:
         """Determine heading level based on font size."""
         if font_size >= h1_thresh:
@@ -1192,7 +1192,7 @@ class DocumentProcessor:
             return "H3"
         return None
 
-    def compute_smart_heading_level(self, block: Dict, font_stats: Dict) -> Optional[str]:
+    def _determine_heading_level_smart(self, block: Dict, font_stats: Dict) -> Optional[str]:
         """
         Determine heading level using both font size and content analysis.
         Improved to better handle numbered sections and hierarchical structure.
@@ -1267,7 +1267,7 @@ class DocumentProcessor:
         
         return None
 
-    def supplement_position_data(self, headings: List[Dict]) -> None:
+    def _add_missing_y_positions(self, headings: List[Dict]) -> None:
         """Add missing Y positions for headings by finding them in the document."""
         # Skip if all headings already have y_pos
         if all("y_pos" in h for h in headings):
@@ -1352,7 +1352,7 @@ class DocumentProcessor:
                 if "y_pos" not in heading:
                     heading["y_pos"] = i * 100
             
-    def sanitize_heading_content(self, text: str) -> str:
+    def _clean_heading_text(self, text: str) -> str:
         """Clean and normalize heading text."""
         # Remove extra whitespace
         text = re.sub(r'\s+', ' ', text.strip())
@@ -1365,7 +1365,7 @@ class DocumentProcessor:
         
         return text
 
-    def check_title_redundancy(self, heading_text: str, title: str, heading_page: int, title_page: int) -> bool:
+    def _is_title_duplicate(self, heading_text: str, title: str, heading_page: int, title_page: int) -> bool:
         """
         Check if a heading is a fuzzy duplicate of the title on the same page.
         Uses difflib for fuzzy string matching with 90% similarity threshold.
@@ -1417,7 +1417,7 @@ class DocumentProcessor:
                     continue
                     
                 # Additional filtering for obvious non-headings
-                if not self.obv_non_hd(heading["text"]):
+                if not self._is_obvious_non_heading(heading["text"]):
                     # Check if heading has content following it
                     if self._has_content_below(heading):
                         cleaned_headings.append(heading)
@@ -1430,7 +1430,7 @@ class DocumentProcessor:
         normalized_headings = self._normalize_heading_hierarchy(cleaned_headings)
         
         # Apply advanced validation as final step
-        final_headings = self._adv_ai_val(normalized_headings)
+        final_headings = self._advanced_heading_validation(normalized_headings)
         
         # Remove the y_pos field from the final output as it's not needed by external consumers
         for heading in final_headings:
@@ -1439,7 +1439,7 @@ class DocumentProcessor:
         
         return final_headings
         
-    def organize_heading_structure(self, headings: List[Dict]) -> List[Dict]:
+    def _normalize_heading_hierarchy(self, headings: List[Dict]) -> List[Dict]:
         """
         Normalize heading hierarchy based on logical document structure rules:
         1. Apply consistent levels based on section numbering (X.Y means Y is a subsection of X)
@@ -1555,7 +1555,7 @@ class DocumentProcessor:
                 
         return normalized
     
-    def verify_content_presence(self, heading: Dict) -> bool:
+    def _has_content_below(self, heading: Dict) -> bool:
         """Check if a heading has actual content (paragraphs/text) below it."""
         # Special rules first - certain patterns are likely not headings
         text = heading["text"].strip()
@@ -1656,7 +1656,7 @@ class DocumentProcessor:
                     # Make sure the content is actually below the heading (higher Y value)
                     if heading_y_position is None or block_y > heading_y_position:
                         # Skip very short blocks and likely metadata
-                        if len(block_text) > 15 and not self.classify_content_type(block_text):
+                        if len(block_text) > 15 and not self._is_likely_metadata(block_text):
                             content_blocks_after += 1
                             # If we find substantial content, it's a valid heading
                             if content_blocks_after >= 1:
@@ -1684,7 +1684,7 @@ class DocumentProcessor:
             # If we can't verify, default to excluding questionable headings
             return False
     
-    def obv_non_hd(self, text: str) -> bool:
+    def _is_obvious_non_heading(self, text: str) -> bool:
         """
         Additional check for obvious non-headings that passed initial filters.
         Enhanced to handle version numbers and other edge cases.
@@ -1775,7 +1775,7 @@ class DocumentProcessor:
         
         return False
     
-    def _ext_txt_features(self, text: str) -> List[float]:
+    def _extract_text_analysis_features(self, text: str) -> List[float]:
         """Extract text analysis features for internal processing."""
         if not text or len(text.strip()) == 0:
             return [0] * 15
@@ -1825,7 +1825,7 @@ class DocumentProcessor:
         
         return features
     
-    def _adv_ai_val(self, headings: List[Dict]) -> List[Dict]:
+    def _advanced_heading_validation(self, headings: List[Dict]) -> List[Dict]:
         """Advanced validation using internal analysis models."""
         model_path = "heading_classifier.pkl"
         
@@ -1850,7 +1850,7 @@ class DocumentProcessor:
                     continue
                 
                 try:
-                    features = self._ext_txt_features(text)
+                    features = self._extract_text_analysis_features(text)
                     probability = classifier.predict([features], num_iteration=classifier.best_iteration)[0]
                     
                     # Only remove if very confident it's not a heading
